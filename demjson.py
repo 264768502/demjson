@@ -2100,6 +2100,19 @@ class JSONError(JSONException):
         s += ", severity=%r)" % (self.severity,)
         return s
 
+    def message_with_args(self):
+        err = self.message
+        if len(self.args) > 1:
+            err += ': '
+            for anum, a in enumerate(self.args[1:]):
+                if anum > 1:
+                    err += ', '
+                astr = repr(a)
+                if len(astr) > 30:
+                    astr = astr[:30] + '...'
+                err += astr
+        return err
+
     def pretty_description(self, show_positions=True, filename=None):
         if filename:
             pfx = filename.rstrip().rstrip(':') + ':'
@@ -2114,16 +2127,7 @@ class JSONError(JSONException):
         else:
             err += '    '
         # Print severity and main error message
-        err += " %s: %s" % (self.severity.capitalize(), self.message)
-        if len(self.args) > 1:
-            err += ': '
-            for anum, a in enumerate(self.args[1:]):
-                if anum > 1:
-                    err += ', '
-                astr = repr(a)
-                if len(astr) > 30:
-                    astr = astr[:30] + '...'
-                err += astr
+        err += " %s: %s" % (self.severity.capitalize(), self.message_with_args())
         # Print out exception chain
         e2 = self
         while e2:
@@ -5814,6 +5818,8 @@ STRICTNESS OPTIONS (WARNINGS AND ERRORS):
 STATISTICS OPTIONS:
 
  --stats       Show statistics about JSON document
+ -r filename | --report filename
+        Output json lint report with json format
 
 REFORMATTING OPTIONS:
 
@@ -5937,6 +5943,7 @@ MORE INFORMATION:
             stats_fp = verbose_fp
         else:
             stats_fp = None
+        results = None
         try:
             results = decode( jsondata, encoding=input_encoding,
                               return_errors=True,
@@ -5973,10 +5980,10 @@ MORE INFORMATION:
 
                 reformatted = encode(results.object, encoding=output_encoding, json_options=encopts)
 
-        return (success, reformatted)
+        return (success, reformatted, results)
     
     
-    def _lintcheck( self, filename, output_filename,
+    def _lintcheck( self, filename, output_filename, report_filename=None,
                     verbose=False,
                     reformat=False,
                     show_stats=False,
@@ -6002,7 +6009,7 @@ MORE INFORMATION:
             if verbose:
                 verbose_fp = self.stdout
     
-        success, reformatted = self._lintcheck_data(
+        success, reformatted, results = self._lintcheck_data(
             jsondata,
             verbose_fp=verbose_fp,
             reformat=reformat,
@@ -6031,6 +6038,30 @@ MORE INFORMATION:
         elif verbose_fp:
             verbose_fp.write("%shas errors\n" % pfx)
 
+        if report_filename:
+            try:
+                fp = open( report_filename, 'wb' )
+                if results and hasattr(results, 'errors'):
+                    report = []
+                    for err in results.errors:
+                        line, column = 0, 0
+                        if err.position:
+                            line = err.position.line
+                        report.append({
+                            'message': err.message,
+                            'detail': err.message_with_args(),
+                            'severity': err.severity,
+                            'line': err.position.line if err.position else 0,
+                            'column': err.position.column if err.position else 0,
+                        })
+                    import json
+                    fp.write( json.dumps(report).encode('UTF-8') )
+                else:
+                    fp.write(b'[]')
+            except IOError as err:
+                self.stderr.write('%s: %s\n' % (pfx, str(err)) )
+                success = self.SUCCESS_FAIL
+
         return success
 
 
@@ -6054,6 +6085,7 @@ MORE INFORMATION:
         reformat = False
         show_stats = False
         output_filename = None
+        report_filename = None
         input_encoding = None
         output_encoding = 'utf-8'
 
@@ -6066,11 +6098,12 @@ MORE INFORMATION:
     
         try:
             opts, args = getopt.getopt( argv,
-                                        'vqfFe:o:sSW',
+                                        'vqfFe:o:r:sSW',
                                         ['verbose','quiet',
                                          'format','format-compactly',
                                          'stats',
                                          'output',
+                                         'report',
                                          'strict','nonstrict','warn',
                                          'html-safe','xml-safe',
                                          'encoding=',
@@ -6173,6 +6206,8 @@ the options --allow, --warn, or --forbid ; for example:
                 show_stats=True
             elif opt in ('-o', '--output'):
                 output_filename = val
+            elif opt in ('-r', '--report'):
+                report_filename = val
             elif opt in ('-e','--encoding'):
                 input_encoding = val
                 output_encoding = val
@@ -6257,6 +6292,7 @@ the options --allow, --warn, or --forbid ; for example:
         for fn in args:
             try:
                 rc = self._lintcheck( fn, output_filename=output_filename,
+                                      report_filename=report_filename,
                                       verbose=verbose,
                                       reformat=reformat,
                                       show_stats=show_stats,
